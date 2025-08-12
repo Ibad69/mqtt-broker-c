@@ -67,36 +67,79 @@ typedef struct MESSAGE {
     int sent_from_socket;
 } message;
 
-typedef struct SUBSCRIBER {
-    int socket_id;
-} subscriber;
+// internal management of subscribers and topics **** //
+
+// typedef struct SUBSCRIBER {
+//     int socket_id;
+// } subscriber;
+
+// typedef struct TOPIC {
+//     char *name;
+//     int subcsriber_count;
+//     message *messages;
+//     subscriber *subscribers;
+// } topic;
+
 
 typedef struct TOPIC {
     char *name;
-    int subcsriber_count;
-    message *messages;
-    subscriber *subscribers;
+    int *subscribers; // an dynamic array on the heap of subscribers
+    int subscribers_length;
 } topic;
+
+typedef struct TOPICS_ARR {
+    size_t topics_size;
+    topic *topics;
+} topics_arr;
+
 
 typedef struct CLIENT {
     int fd;
     uint8_t *buf;
+    char *topic;
 } client;
 
 
 
-void add_new_subscriber(subscriber *subc, int socket_id, topic *topc) {
-    topc->subscribers[topc->subcsriber_count] = *subc;
-    topc->subcsriber_count++;
+void add_new_subscriber(client *c, topics_arr *tps, char *topic_name) {
+    printf("inside of add subcsriber function \n");
+    printf("checking what is the size of topics : %zu \n", tps->topics_size);
+    int check = 0;
+    for(int i = 0; i < tps->topics_size; i++) {
+        printf("printing the topics name : %s \n", tps->topics[i].name);
+        printf("the topic name that i am gettingg : %s \n", topic_name);
+        if (strcmp(tps->topics[i].name, topic_name) == 0) {
+            check = 1;
+            // add the subscriber 
+            tps->topics[i].subscribers[tps->topics->subscribers_length] = c->fd;
+            tps->topics[i].subscribers_length++;
+            break;
+        }
+    }
 }
 
-void remove_subscriber(subscriber *subc, int socket_id, topic *topc) {
-
+void add_new_topic(char *name, topics_arr *topicsarr) {
+    // TODO: potential memory leak if not freed, need to free it somehow
+    int *subs = malloc(sizeof(topic));
+    if (subs == NULL) {
+        printf("an error occured in allocating memory for subscribers");
+    }
+    topic tp = {.name = name, .subscribers = subs , .subscribers_length = 0};
+    topicsarr->topics[topicsarr->topics_size] = tp;
+    topicsarr->topics_size++;
 }
 
-void add_message_to_topic(topic *topc, message *msg) {
+// void check_for_topic(mqtt_packet *packet, void *received, topic *topc) {
+    
+// }
 
-}
+// void remove_subscriber(subscriber *subc, int socket_id, topic *topc) {
+
+// }
+
+// void add_message_to_topic(topic *topc, message *msg) {
+
+// }
 
 ssize_t pack_packet_header(uint8_t *buf, size_t bufsz, mqtt_packet *packet) {
    *buf = packet->header.control_type << 4; 
@@ -390,7 +433,8 @@ ssize_t send_all(int socfd, void *buf, size_t len, int flags) {
 
 void handle_client_data(int listener, 
                         int *fd_count, struct pollfd *pfds, 
-                        int *pfd_i, topic *topics, 
+                        int *pfd_i, 
+                        topics_arr *tps, 
                         uint8_t *buf, ssize_t *bufsz, 
                         uint8_t *sbuf, ssize_t *sbufsz
                         )
@@ -419,20 +463,18 @@ void handle_client_data(int listener,
     // printf("reamaining length is : %d \n", packet.header.remaining_length);
 
     switch(packet.header.control_type) {
-        // packet type / header buf[0]
-        // remaining_length buf[1]
-        // variable header buf[2] buf[3]
-        // payload buf[4] 
         case SUBSCRIBE: { 
-            // printf("inside subscribe request the name of the topic : %s \n", topics[0].name);
             unpack_sub_response(buf, &packet, *bufsz);
-            // unsigned header_size = buf[0];
-            // unsigned remaining_length = buf[1];
-            // for (int i = 7; i >= 1; i--){
-            //     printf("going through the remaining_length byte : bit => %d value => %d \n", i, (remaining_length >> i) & 1);
+            printf("topic name that the user want to subscribe to : %s \n", (char*)packet.topic_name);
+            char *topic_name = (char*)packet.topic_name;
+            client c = {.fd = pfds[*pfd_i].fd, .topic = topic_name};
+            add_new_subscriber(&c, tps, topic_name);
+            // for (int i = 0; i < tps->topics_size; i++) { 
+            //     printf("insde topics size : %s \n", tps->topics[i].name);
+            //     for(int j = 0; j < tps->topics[i].subscribers_length; j++) {
+            //         printf("the subscribers in this : %d \n", tps->topics[i].subscribers[j]);
+            //     }
             // }
-            // unsigned long int h = ((unsigned long int)buf[0]>>25 | (unsigned long int)buf[1]>>16 |(unsigned long int)buf[2]>>8 | buf[3]);
-            // printf("print the value: %lu \n", h);
             break;
         }
         case CONNECT: {
@@ -627,7 +669,7 @@ int accept_connection(struct pollfd **pfds, int *fd_count, int *fd_size, int lis
     return a;
 }
 
-void process_connection(struct pollfd **pfds, int *fd_size, int *fd_count, int listener, topic *topics) {
+void process_connection(struct pollfd **pfds, int *fd_size, int *fd_count, int listener, topics_arr *tps) {
     for (int i = 0; i < *fd_count; i++) {
         // printf("printing the value that the pfds is containing : %d", pfds[i].revents);
         if ((*pfds)[i].revents & (POLLIN | POLLHUP))  {
@@ -640,7 +682,7 @@ void process_connection(struct pollfd **pfds, int *fd_size, int *fd_count, int l
                 ssize_t bufsz = sizeof(buf);
                 uint8_t sbuf[256];
                 ssize_t sbufsz = sizeof(sbuf);
-                handle_client_data(listener, fd_count, *pfds, &i, topics, buf, &bufsz, sbuf, &sbufsz);
+                handle_client_data(listener, fd_count, *pfds, &i, tps, buf, &bufsz, sbuf, &sbufsz);
                 // handle_client_datav1(listener, fd_count, *pfds, &i, topics);
             }
         }
@@ -654,25 +696,47 @@ int main () {
     int fd_size = 5;
     int fd_count = 0;
 
-    subscriber *subcs = malloc(5);
-    if (subcs == NULL) {
-        printf("error allocating subscribers");
+    // subscriber *subcs = malloc(5);
+    // if (subcs == NULL) {
+    //     printf("error allocating subscribers");
+    // }
+
+    // message *msgs = malloc(100);
+    // if (msgs == NULL) {
+    //     printf("error allocating msgs");
+    // }
+
+    // topic tp = {.name = "data", .subcsriber_count = 0, .subscribers = subcs, .messages = msgs };
+    // topics *tps = malloc(sizeof(topics));
+    // if (tps == NULL) {
+    //     printf("error allocating the tps topics \n");
+    // }
+    // tps->topics_size = 0;
+    // tps->topics[tps->topics_size] = tp;
+    // topic *topics = malloc(sizeof(topic));
+    // if (topics == NULL) {
+    //     printf("error allocating topics");
+    // }
+
+    // topic tp2 = {.name = "iotgateway", .subscribers = subs , .subscribers_length = 0};
+    // topic tp = {.name = "data", .subscribers = subs , .subscribers_length = 0};
+
+    // TODO: do we really need this on the heap?
+    topics_arr *topicsarr = malloc(sizeof(topics_arr));
+    if (topicsarr == NULL) {
+        printf("an error occured in allocating memory for topics");
     }
 
-    message *msgs = malloc(100);
-    if (msgs == NULL) {
-        printf("error allocating msgs");
+    topic *tparr = malloc(sizeof(topic)*2);
+    if (tparr == NULL) {
+        printf("an error occured in allocatingg memory for tparr");
     }
 
-    topic tp = {.name = "data", .subcsriber_count = 0, .subscribers = subcs, .messages = msgs };
-    topic *topics = malloc(sizeof(topic));
-    if (topics == NULL) {
-        printf("error allocating topics");
-    }
-
-    int topic_count = 0;
-    topics[topic_count] = tp;
-
+    topicsarr->topics_size = 0;
+    topicsarr->topics = tparr;
+    add_new_topic("data", topicsarr);
+    add_new_topic("sensors", topicsarr);
+    
     struct pollfd *pfds = malloc(fd_size*2);
     if (pfds == NULL) {
         printf("error allocating pfds");
@@ -692,13 +756,13 @@ int main () {
         if (pollres == -1) {
             perror("polling");
         }
-        process_connection(&pfds, &fd_size, &fd_count, listener, topics);
+        process_connection(&pfds, &fd_size, &fd_count, listener, topicsarr);
     }
 
-    free(pfds);
-    free(topics);
-    free(subcs);
-    free(msgs);
+    free(topicsarr);
+    free(tparr);
+    // free(subs);
+    // free(msgs);
 
     return 0;
 }
